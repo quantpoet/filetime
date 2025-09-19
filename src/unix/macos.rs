@@ -98,11 +98,24 @@ fn fetch(cache: &AtomicUsize, name: &CStr) -> Option<usize> {
         n => return Some(n),
     }
     let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr() as *const _) };
-    let (val, ret) = if sym.is_null() {
-        (1, None)
-    } else {
-        (sym as usize, Some(sym as usize))
-    };
-    cache.store(val, SeqCst);
-    return ret;
+    let val = if sym.is_null() { 1 } else { sym as usize };
+
+    // Use compare_exchange to avoid race conditions
+    match cache.compare_exchange(0, val, SeqCst, SeqCst) {
+        Ok(_) => {
+            // We successfully stored our value
+            if val == 1 {
+                None
+            } else {
+                Some(val)
+            }
+        }
+        Err(current) => {
+            // Another thread beat us to it, use their value
+            match current {
+                1 => None,
+                n => Some(n),
+            }
+        }
+    }
 }
